@@ -1,0 +1,52 @@
+#!/usr/bin/env php
+<?php
+
+use ProjectSaturnStudios\Rocketship\Native\ServerStateFile;
+use ProjectSaturnStudios\Rocketship\Native\Supervisor;
+use ProjectSaturnStudios\Rocketship\Native\WorkerMode;
+
+ini_set('display_errors', 'stderr');
+
+require __DIR__.'/../fixes/fix-symfony-dd.php';
+
+/*
+|--------------------------------------------------------------------------
+| Read The Server State
+|--------------------------------------------------------------------------
+|
+| The start command wrote everything the server needs into the state file:
+| where to listen, how many workers in which mode, the application's paths
+| and its Rocketship configuration. The supervisor's pid goes back into it.
+|
+*/
+
+$serverState = json_decode(file_get_contents(
+    $serverStateFile = $_SERVER['argv'][1]
+), true)['state'];
+
+$basePath = require __DIR__.'/bootstrap.php';
+
+$serverState['basePath'] = $basePath;
+$serverState['autoload'] = ($_ENV['COMPOSER_VENDOR_DIR'] ?? "{$basePath}/vendor").'/autoload.php';
+
+(new ServerStateFile($serverStateFile))->writeProcessId(getmypid());
+
+/*
+|--------------------------------------------------------------------------
+| Start The Workers
+|--------------------------------------------------------------------------
+|
+| Threads when this PHP can run them, forked processes otherwise. Either way
+| each worker boots the application once and serves on its own event loop.
+|
+*/
+
+try {
+    $mode = WorkerMode::resolve($serverState['mode'] ?? 'auto');
+} catch (RuntimeException $e) {
+    fwrite(STDERR, $e->getMessage().PHP_EOL);
+
+    exit(1);
+}
+
+exit((new Supervisor($serverState, $mode))->run());

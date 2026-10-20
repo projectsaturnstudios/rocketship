@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit colors="true" defaultTestSuite="Feature">
+    <testsuites>
+        <testsuite name="Feature">
+            <directory suffix="Test.php">./tests</directory>
+            <exclude>./tests/Rocketship</exclude>
+        </testsuite>
+        <!-- Pest tests: vendor/bin/pest (testsuite option Rocketship), in its own process: Octane's suite alias-mocks Stream -->
+        <testsuite name="Rocketship">
+            <directory suffix="Test.php">./tests/Rocketship</directory>
+        </testsuite>
+    </testsuites>
+
+    <php>
+        <env name="APP_ENV" value="testing"/>
+        <env name="APP_KEY" value="AckfSECXIvnK5r28GVIWUAxmbBSjTsmF"/>
+    </php>
+</phpunit>

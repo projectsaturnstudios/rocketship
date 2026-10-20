@@ -1,0 +1,12 @@
+#!/usr/bin/env php
+<?php
+
+use Symfony\Component\Console\Input\ArgvInput;
+
+define('LARAVEL_START', microtime(true));
+
+require getenv('COMPOSER_VENDOR_DIR').'/autoload.php';
+
+$status = (require_once __DIR__.'/bootstrap/app.php')->handleCommand(new ArgvInput);
+
+exit($status);

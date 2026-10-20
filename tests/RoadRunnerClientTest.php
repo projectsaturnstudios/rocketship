@@ -1,0 +1,124 @@
+<?php
+
+namespace Laravel\Octane\Tests;
+
+use Exception;
+use Generator;
+use Hamcrest\Core\IsInstanceOf;
+use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Laminas\Diactoros\ServerRequestFactory;
+use Laravel\Octane\OctaneResponse;
+use Laravel\Octane\RequestContext;
+use Laravel\Octane\RoadRunner\RoadRunnerClient;
+use Mockery;
+use Psr\Http\Message\ResponseInterface;
+use Spiral\RoadRunner\Http\HttpWorker;
+use Spiral\RoadRunner\Http\PSR7Worker;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+
+class RoadRunnerClientTest extends TestCase
+{
+    public function test_marshal_request_method_marshals_proper_illuminate_request()
+    {
+        $client = new RoadRunnerClient(Mockery::mock(PSR7Worker::class));
+
+        $psr7Request = (new ServerRequestFactory)->createServerRequest('GET', '/home');
+        $psr7Request = $psr7Request->withQueryParams(['name' => 'Taylor']);
+
+        [$request, $context] = $client->marshalRequest(new RequestContext([
+            'psr7Request' => $psr7Request,
+        ]));
+
+        $this->assertInstanceOf(Request::class, $request);
+        $this->assertEquals('Taylor', $request->query('name'));
+    }
+
+    public function test_respond_method_send_response_to_roadrunner()
+    {
+        $client = new RoadRunnerClient($psr7Client = Mockery::mock(PSR7Worker::class));
+
+        $psr7Request = (new ServerRequestFactory)->createServerRequest('GET', '/home');
+        $psr7Request = $psr7Request->withQueryParams(['name' => 'Taylor']);
+
+        $psr7Client->shouldReceive('respond')->once()->with(Mockery::type(ResponseInterface::class));
+
+        $client->respond(new RequestContext([
+            'psr7Request' => $psr7Request,
+        ]), new OctaneResponse(new Response('Hello World', 200)));
+    }
+
+    public function test_respond_method_send_streamed_response_to_roadrunner()
+    {
+        $client = new RoadRunnerClient($psr7Client = Mockery::mock(PSR7Worker::class));
+
+        $psr7Request = (new ServerRequestFactory)->createServerRequest('GET', '/home');
+        $psr7Request = $psr7Request->withQueryParams(['name' => 'Taylor']);
+
+        $psr7Client->shouldReceive('respond')->once()->with(Mockery::type(ResponseInterface::class));
+
+        $client->respond(new RequestContext([
+            'psr7Request' => $psr7Request,
+        ]), new OctaneResponse(new StreamedResponse(function () {
+            echo 'Hello World';
+        }, 200)));
+    }
+
+    public function test_respond_method_send_streamed_generator_response_to_roadrunner()
+    {
+        $client = new RoadRunnerClient($psr7Client = Mockery::mock(PSR7Worker::class));
+
+        $psr7Request = (new ServerRequestFactory)->createServerRequest('GET', '/home');
+        $psr7Request = $psr7Request->withQueryParams(['name' => 'Taylor']);
+
+        $httpWorker = Mockery::mock(HttpWorker::class);
+
+        $responseCallback = function (): Generator {
+            yield 'Hello World';
+        };
+
+        $psr7Client->shouldReceive('getHttpWorker')->once()->andReturn($httpWorker);
+        $httpWorker->shouldReceive('respond')->once()->with(
+            200,
+            IsInstanceOf::anInstanceOf(Generator::class),
+            Mockery::hasKey('cache-control'),
+        );
+
+        $client->respond(new RequestContext([
+            'psr7Request' => $psr7Request,
+        ]), new OctaneResponse(new StreamedResponse($responseCallback, 200)));
+    }
+
+    public function test_error_method_sends_error_response_to_roadrunner()
+    {
+        $psr7Client = Mockery::mock(PSR7Worker::class);
+        $psr7Client->shouldReceive('getWorker->error')->once()->with('Internal server error.');
+
+        $client = new RoadRunnerClient($psr7Client);
+
+        $app = $this->createApplication();
+        $app['config']['app.debug'] = false;
+        $request = Request::create('/', 'GET');
+        $context = new RequestContext;
+
+        $client->error(new Exception('Something went wrong...'), $app, $request, $context);
+    }
+
+    public function test_error_method_sends_detailed_error_response_to_roadrunner_in_debug_mode()
+    {
+        $e = new Exception('Something went wrong...');
+
+        $psr7Client = Mockery::mock(PSR7Worker::class);
+        $psr7Client->shouldReceive('getWorker->error')->once()->with((string) $e);
+
+        $client = new RoadRunnerClient($psr7Client);
+
+        $app = $this->createApplication();
+        $app['config']['app.debug'] = true;
+
+        $request = Request::create('/', 'GET');
+        $context = new RequestContext;
+
+        $client->error($e, $app, $request, $context);
+    }
+}

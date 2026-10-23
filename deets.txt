@@ -1,0 +1,17 @@
+rocketship-server:
+sudo pw: Chs5XrBPV{V39Grn*5=>
+region: VA
+server type: c7g.large
+ubuntu: 24.04
+php 8.4.27 NTS
+Public IP 100.27.198.55
+Private IP 10.0.0.90
+
+rocketship-red:
+sudo pw: IRZ7M;dmr5^t#;d(%5$W
+region: VA
+server type: m4g.medium
+ubuntu: 24.04
+php 8.4.27 NTS
+Public IP 54.227.151.42
+Private IP 10.0.0.69

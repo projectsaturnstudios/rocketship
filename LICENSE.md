@@ -1,3 +1,8 @@
+Rocketship is a fork of Laravel Octane (https://github.com/laravel/octane), copyright
+Taylor Otwell and the Laravel contributors, licensed under the MIT License
+reproduced below. Modifications copyright (c) 2026 Angel Gonzalez / Project
+Saturn Studios, LLC, under the same license.
+
 The MIT License (MIT)
 
 Copyright (c) Taylor Otwell

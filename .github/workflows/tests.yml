@@ -2,81 +2,79 @@ name: tests
 
 on:
   push:
-    branches:
-      - main
-      - master
-      - '*.x'
   pull_request:
-  schedule:
-    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  tests:
-    runs-on: ubuntu-22.04
-
-    strategy:
-      fail-fast: true
-      matrix:
-        php: [8.1, 8.2, 8.3, 8.4, 8.5]
-        laravel: [10, 11, 12, 13]
-        driver: [swoole, openswoole, 'roadrunner/frankenphp']
-        exclude:
-          - php: 8.1
-            laravel: 11
-          - php: 8.1
-            laravel: 12
-          - php: 8.1
-            laravel: 13
-          - php: 8.2
-            laravel: 13
-          - php: 8.4
-            laravel: 10
-          - php: 8.5
-            laravel: 10
-          - php: 8.5
-            laravel: 11
-          - php: 8.1
-            driver: openswoole
-
-    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.driver }}
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      - uses: actions/checkout@v4
 
-      - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ matrix.php }}
-          extensions: dom, curl, libxml, mbstring, zip, ${{ matrix.driver != 'roadrunner/frankenphp' && matrix.driver || '' }}
-          ini-values: error_reporting=E_ALL
-          tools: composer:v2
+          php-version: '8.4'
+          tools: composer
           coverage: none
 
-      - name: Show extension info
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Audit dependencies for security advisories
+        run: composer audit --no-interaction
+
+  tests:
+    name: PHP ${{ matrix.php }} ${{ matrix.ts }} - ${{ matrix.loop }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+        ts: [nts, zts]
+        loop: [epoll, kqueue]
+        include:
+          - loop: epoll
+            os: ubuntu-24.04
+          - loop: kqueue
+            os: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The native server needs pcntl and posix in both modes; threads mode adds ext-parallel on a ZTS PHP.
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, posix, sockets, pdo_sqlite${{ matrix.ts == 'zts' && ', parallel' || '' }}
+          tools: composer, pie
+          coverage: none
+        env:
+          phpts: ${{ matrix.ts == 'zts' && 'ts' || 'nts' }}
+
+      - name: Install the loop extension and posi
         run: |
-          php --ri ${{ matrix.driver }}
-        if: matrix.driver != 'roadrunner/frankenphp'
+          sudo pie install php-io-extensions/${{ matrix.loop }}
+          sudo pie install php-io-extensions/posi
 
       - name: Install dependencies
-        run: |
-          # Pest 4 needs PHP 8.3+ and PHPUnit 12: rows that cannot resolve it drop it and run Octane's suite on PHPUnit alone.
-          composer update --prefer-dist --no-interaction --no-progress --with="laravel/framework:^${{ matrix.laravel }}" \
-            || { composer remove --dev pestphp/pest --no-update --no-interaction \
-              && composer update --prefer-dist --no-interaction --no-progress --with="laravel/framework:^${{ matrix.laravel }}"; }
+        run: composer update --prefer-dist --no-interaction --no-progress
 
-      - name: Execute tests
+      - name: Report the native server's modes
         run: |
-          vendor/bin/testbench package:sync-skeleton
-          if [ -x vendor/bin/pest ]; then
-            # Separate processes: Octane's suite alias-mocks Laravel\Octane\Stream for the rest of its process.
-            vendor/bin/pest --testsuite=Feature --display-deprecations --fail-on-deprecation
-            vendor/bin/pest --testsuite=Rocketship --display-deprecations --fail-on-deprecation
-          else
-            vendor/bin/phpunit --display-deprecations --fail-on-deprecation
-          fi
+          php -r 'require "vendor/autoload.php"; use ProjectSaturnStudios\Rocketship\Native\WorkerMode; echo "processes: ", WorkerMode::processesAvailable() ? "yes" : "no", PHP_EOL, "threads: ", WorkerMode::threadsUnavailable() ?? "yes", PHP_EOL;'
+
+      - name: Run Octane's tests
+        run: vendor/bin/pest --ci
+
+      - name: Run Rocketship's tests
+        run: vendor/bin/pest --ci --testsuite=Rocketship

@@ -11,6 +11,7 @@ use ProjectSaturnStudios\Rocketship\Native\Control\ControlStream;
 use ProjectSaturnStudios\Rocketship\Native\Http\ParserLimits;
 use Laravel\Octane\Stream;
 use Laravel\Octane\Worker;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -55,6 +56,12 @@ final class NativeWorker
             // Without this, a PHP that loads ext-swoole makes Octane post the tasks to this server's own workers.
             $worker->application()->bindIf(DispatchesTasks::class, SequentialTaskDispatcher::class);
             $listener = $listen();
+
+            // A slot's own socket joins the port only now that the app has booted (Supervisor::run). Listening on
+            // one that already listens, as after a crash, only sets its backlog again.
+            if (WorkerMode::kernelBalancesListeners() && posix_listen(posix_fileno($listener), Server::BACKLOG) !== 0) {
+                throw new RuntimeException("Worker {$slot} could not listen on its socket (errno ".posi_errno().').');
+            }
         } catch (Throwable $e) {
             Stream::shutdown($e);
             $control->send('failed');
@@ -95,8 +102,12 @@ final class NativeWorker
                 $loop->cancelReadable($control->stream);
             }
 
-            if ($frames === null || array_intersect($frames, ['stop', 'reload']) !== []) {
+            // A reload (or a max_requests recycle, retired by a reload frame) has a replacement serving: idle
+            // connections stay open for their next request. A stop, or a master gone, closes them now.
+            if ($frames === null || in_array('stop', $frames, true)) {
                 $server->drain();
+            } elseif (in_array('reload', $frames, true)) {
+                $server->drain(keepIdle: true);
             }
         });
 
@@ -130,9 +141,10 @@ final class NativeWorker
         // SIGTERM on macOS, so the mask is set only at creation.
 
         // Cancelled inside a stream's output handler, the thread's shutdown would report "Cannot use output buffering
-        // in output buffering display handlers": the cancel's own trace, not an error. Every other error still shows.
+        // in output buffering display handlers": the cancel's own trace, not an error. A thread cancelled while it
+        // streams ends silent, as Swoole's killed worker does; every other thread's errors still show.
         register_shutdown_function(static function (): void {
-            if (ResponseWriter::$inOutputHandler) {
+            if (ResponseWriter::$streaming) {
                 error_reporting(0);
             }
         });

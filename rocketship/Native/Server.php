@@ -15,6 +15,9 @@ use RuntimeException;
  */
 final class Server
 {
+    /** Listen backlog, as nginx and React use; PHP's default of 32 refuses a burst. */
+    public const BACKLOG = 511;
+
     /** Seconds the listener goes unwatched after an accept fails for lack of descriptors. */
     private const ACCEPT_BACKOFF = 0.1;
 
@@ -47,21 +50,22 @@ final class Server
 
     /**
      * Listen on host:port. With $reusePort every worker binds its own socket on the same port and the
-     * kernel balances connections across them (Linux SO_REUSEPORT).
+     * kernel balances connections across them (Linux SO_REUSEPORT). Without $listen the socket is only bound:
+     * it takes no connections, and is no member of its port's SO_REUSEPORT group, until posix_listen().
      *
      * @return resource
      */
-    public static function listen(string $host, int $port, bool $reusePort = false)
+    public static function listen(string $host, int $port, bool $reusePort = false, bool $listen = true)
     {
-        // backlog 511 as nginx and React listen; PHP's default of 32 refuses a burst.
         $context = stream_context_create(['socket' => [
-            'backlog' => 511,
+            'backlog' => self::BACKLOG,
             'so_reuseport' => $reusePort,
             'tcp_nodelay' => true,
         ]]);
 
         $address = str_contains($host, ':') && ! str_starts_with($host, '[') ? "[{$host}]" : $host;
-        $listener = @stream_socket_server("tcp://{$address}:{$port}", $errno, $error, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN, $context);
+        $flags = $listen ? STREAM_SERVER_BIND | STREAM_SERVER_LISTEN : STREAM_SERVER_BIND;
+        $listener = @stream_socket_server("tcp://{$address}:{$port}", $errno, $error, $flags, $context);
 
         if ($listener === false) {
             throw new RuntimeException("Could not listen on {$host}:{$port}: {$error} ({$errno})");
@@ -117,7 +121,8 @@ final class Server
      * Stop accepting, let in-flight requests finish, then stop the loop. Connections still busy after
      * drainTimeout are closed.
      */
-    public function drain(): void
+    /** Stop accepting and finish every connection; $keepIdle on a reload, see Connection::drain(). */
+    public function drain(bool $keepIdle = false): void
     {
         if ($this->draining) {
             return;
@@ -134,7 +139,7 @@ final class Server
         $this->draining = true;
 
         foreach ($this->connections as $connection) {
-            $connection->drain();
+            $connection->drain($keepIdle);
         }
 
         $this->drainDeadline = $this->loop->addTimer($this->options->drainTimeout, function (): void {

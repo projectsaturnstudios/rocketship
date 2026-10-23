@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rocketship Benchmarks</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5d6673; --line: #dfe3e8; --accent: #3b5bdb;
+  --good: #2b8a3e; --bad: #c92a2a; --chip: #eef1f5;
+  --c-native: #3b5bdb; --c-native-apcu: #748ffc; --c-native-threads: #0c8599; --c-native-threads-apcu: #3bc9db; --c-swoole: #e8590c; --c-swoole-apcu: #ffa94d;
+  --c-frankenphp: #2b8a3e; --c-roadrunner: #862e9c; --c-roadrunner-apcu: #cc5de8;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216; --panel: #171b21; --ink: #e6e9ee; --muted: #9aa4b2; --line: #2a313a; --accent: #91a7ff;
+    --good: #69db7c; --bad: #ff8787; --chip: #222832;
+    --c-native: #91a7ff; --c-native-apcu: #5c7cfa; --c-native-threads: #3bc9db; --c-native-threads-apcu: #99e9f2; --c-swoole: #ff922b; --c-swoole-apcu: #ffc078;
+    --c-frankenphp: #69db7c; --c-roadrunner: #da77f2; --c-roadrunner-apcu: #e599f7;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216; --panel: #171b21; --ink: #e6e9ee; --muted: #9aa4b2; --line: #2a313a; --accent: #91a7ff;
+  --good: #69db7c; --bad: #ff8787; --chip: #222832;
+  --c-native: #91a7ff; --c-native-apcu: #5c7cfa; --c-native-threads: #3bc9db; --c-native-threads-apcu: #99e9f2; --c-swoole: #ff922b; --c-swoole-apcu: #ffc078;
+  --c-frankenphp: #69db7c; --c-roadrunner: #da77f2; --c-roadrunner-apcu: #e599f7;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header, main { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
+header { padding-top: 24px; display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; justify-content: space-between; }
+h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+.sub { color: var(--muted); font-size: 13px; }
+.controls { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 12px 0; border-bottom: 1px solid var(--line); margin-bottom: 16px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+select { width: 100%; min-width: 0; }
+select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
+button { cursor: pointer; }
+.cells { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--chip); font-size: 13px; color: var(--ink); cursor: pointer; user-select: none; }
+.chip input { margin: 0; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+.chart { position: relative; height: 320px; }
+.wide { grid-column: 1 / -1; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--muted); font-weight: 600; }
+.win { color: var(--good); font-weight: 600; }
+.fail { color: var(--bad); }
+footer { max-width: 1180px; margin: 24px auto; padding: 0 16px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Rocketship benchmarks</h1>
+    <div class="sub" id="subtitle"></div>
+  </div>
+  <button id="theme" type="button" title="Light, dark or the system's theme">Theme: auto</button>
+</header>
+<main>
+  <section class="controls" aria-label="Filters">
+    <label>Round <select id="round"></select></label>
+    <label>Route <select id="route"></select></label>
+    <label>Concurrency <select id="conc"></select></label>
+    <label>Metric
+      <select id="metric">
+        <option value="rps">Requests per second</option>
+        <option value="p50">p50 latency (ms)</option>
+        <option value="p90">p90 latency (ms)</option>
+        <option value="p99">p99 latency (ms)</option>
+        <option value="cpu">Server CPU per request (µs)</option>
+      </select>
+    </label>
+    <label>Statistic <select id="stat"></select></label>
+    <label>APCu
+      <select id="apcu">
+        <option value="all">With and without</option>
+        <option value="plain">Without APCu</option>
+        <option value="apcu">With APCu</option>
+      </select>
+    </label>
+    <div class="cells" id="cells" role="group" aria-label="Cells shown"></div>
+  </section>
+
+  <div class="grid">
+    <section class="panel"><h2 id="t-bars"></h2><div class="chart"><canvas id="bars"></canvas></div></section>
+    <section class="panel"><h2 id="t-lines"></h2><div class="chart"><canvas id="lines"></canvas></div></section>
+    <section class="panel"><h2 id="t-routes"></h2><div class="chart"><canvas id="routes"></canvas></div></section>
+    <section class="panel"><h2>Memory: RSS of every process in the cell</h2><div class="chart"><canvas id="memory"></canvas></div></section>
+    <section class="panel wide"><h2 id="t-table"></h2><div class="scroll"><table id="table"></table></div></section>
+    <section class="panel wide"><h2>Behaviour</h2><div class="scroll"><table id="behaviour"></table></div></section>
+  </div>
+</main>
+<footer>FrankenPHP runs the PHP built into its own binary, not the round's PHP build. Every number comes from <code>benchmarks/results/</code>, which the harness in <code>benchmarks/harness/</code> wrote. Chart.js is inlined under its MIT license.</footer>
+
+<script>/*__CHARTJS__*/</script>
+<script>
+const DATA = /*__DATA__*/null;
+const METRICS = {
+  rps: { name: 'req/s', better: 'high', digits: 0 }, p50: { name: 'p50 ms', better: 'low', digits: 1 },
+  p90: { name: 'p90 ms', better: 'low', digits: 1 }, p99: { name: 'p99 ms', better: 'low', digits: 1 },
+  cpu: { name: 'CPU µs/req', better: 'low', digits: 0 },
+};
+const $ = (id) => document.getElementById(id);
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+const charts = {};
+const state = { round: 0, route: 'plain', c: 64, metric: 'rps', stat: 'median', apcu: 'all', hidden: new Set() };
+
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const colour = (cell) => css('--c-' + cell.replace(':plain', '').replace(':', '-'));
+const label = (cell) => DATA.labels[cell] || cell;
+const round = () => DATA.rounds[state.round];
+const median = (xs) => { const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const fmt = (v, d) => v == null ? '—' : v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+
+function cellsAll() {
+  const present = new Set(round().points.map((p) => p.cell));
+  return [...DATA.order.filter((c) => present.has(c)), ...[...present].filter((c) => !DATA.order.includes(c)).sort()];
+}
+function cellsShown() {
+  return cellsAll().filter((c) => !state.hidden.has(c) && (state.apcu === 'all' || c.endsWith(':' + state.apcu)));
+}
+function value(cell, route, c, metric = state.metric) {
+  const pts = round().points.filter((p) => p.cell === cell && p.route === route && p.c === c && !p.failed && p[metric] != null);
+  if (!pts.length) return null;
+  const xs = pts.map((p) => p[metric]);
+  if (state.stat === 'median') return { v: median(xs), min: Math.min(...xs), max: Math.max(...xs), n: xs.length };
+  const p = pts.find((q) => String(q.rep) === state.stat);
+  return p ? { v: p[metric], min: p[metric], max: p[metric], n: 1 } : null;
+}
+
+function fillSelect(el, options, current) {
+  el.innerHTML = options.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+  el.value = String(current);
+}
+function setupControls() {
+  fillSelect($('round'), DATA.rounds.map((r, i) => [i, r.tag]), state.round);
+  const routes = DATA.routes.filter((r) => round().points.some((p) => p.route === r));
+  if (!routes.includes(state.route)) state.route = routes[0];
+  fillSelect($('route'), routes.map((r) => [r, '/' + r]), state.route);
+  const cs = [...new Set(round().points.map((p) => p.c))].sort((a, b) => a - b);
+  if (!cs.includes(state.c)) state.c = cs.includes(64) ? 64 : cs[0];
+  fillSelect($('conc'), cs.map((c) => [c, c + ' connections']), state.c);
+  const reps = [...new Set(round().points.map((p) => p.rep))].sort((a, b) => a - b);
+  fillSelect($('stat'), [['median', 'Median of reps'], ...reps.map((r) => [r, 'Rep ' + r])], state.stat);
+  $('cells').innerHTML = cellsAll().map((c) => `<label class="chip"><input type="checkbox" value="${c}" ${state.hidden.has(c) ? '' : 'checked'}><span class="dot" style="background:${colour(c)}"></span>${label(c)}</label>`).join('');
+  const r = round();
+  const cpu = r.cells[0]?.cell?.php ? ' · PHP ' + r.cells[0].cell.php : '';
+  $('subtitle').textContent = `Round ${r.tag}${cpu} · ${r.points.length} measurements · ${r.points.filter((p) => p.failed).length} failed after a retry · ${r.retries} retries`;
+}
+
+function baseOptions(yTitle) {
+  const ink = css('--ink'), muted = css('--muted'), line = css('--line');
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    plugins: { legend: { labels: { color: ink, boxWidth: 12 } }, tooltip: { intersect: false, mode: 'nearest' } },
+    scales: {
+      x: { ticks: { color: muted }, grid: { color: line } },
+      y: { beginAtZero: true, title: { display: true, text: yTitle, color: muted }, ticks: { color: muted }, grid: { color: line } },
+    },
+  };
+}
+function draw(id, config) {
+  charts[id]?.destroy();
+  charts[id] = new Chart($(id), config);
+}
+
+function render() {
+  const m = METRICS[state.metric], shown = cellsShown(), r = round();
+  const routes = DATA.routes.filter((x) => r.points.some((p) => p.route === x));
+  const cs = [...new Set(r.points.map((p) => p.c))].sort((a, b) => a - b);
+
+  // 1. The metric for each cell at the chosen route and concurrency, with the reps' range.
+  $('t-bars').textContent = `${m.name} · /${state.route} · ${state.c} connections`;
+  const bars = shown.map((c) => value(c, state.route, state.c));
+  draw('bars', {
+    type: 'bar',
+    data: { labels: shown.map(label), datasets: [
+      { label: m.name, data: bars.map((b) => b?.v ?? null), backgroundColor: shown.map(colour), borderRadius: 6 },
+      { label: 'range of reps', data: bars.map((b) => b ? [b.min, b.max] : null), backgroundColor: css('--muted') + '55', barPercentage: 0.15, grouped: false },
+    ] },
+    options: { ...baseOptions(m.name), plugins: { ...baseOptions().plugins, legend: { display: false },
+      tooltip: { callbacks: { label: (ctx) => { const b = bars[ctx.dataIndex]; return b ? `${fmt(b.v, m.digits)} (min ${fmt(b.min, m.digits)}, max ${fmt(b.max, m.digits)}, ${b.n} reps)` : 'no data'; } } } } },
+  });
+
+  // 2. The metric across concurrency at the chosen route.
+  $('t-lines').textContent = `${m.name} across concurrency · /${state.route}`;
+  draw('lines', {
+    type: 'line',
+    data: { labels: cs.map(String), datasets: shown.map((c) => ({
+      label: label(c), data: cs.map((x) => value(c, state.route, x)?.v ?? null),
+      borderColor: colour(c), backgroundColor: colour(c), tension: 0.2, spanGaps: true,
+    })) },
+    options: { ...baseOptions(m.name), scales: { ...baseOptions(m.name).scales, x: { ...baseOptions().scales.x, title: { display: true, text: 'connections', color: css('--muted') } } } },
+  });
+
+  // 3. The metric on every route at the chosen concurrency.
+  $('t-routes').textContent = `${m.name} by route · ${state.c} connections`;
+  draw('routes', {
+    type: 'bar',
+    data: { labels: routes.map((x) => '/' + x), datasets: shown.map((c) => ({
+      label: label(c), data: routes.map((x) => value(c, x, state.c)?.v ?? null), backgroundColor: colour(c), borderRadius: 4,
+    })) },
+    options: baseOptions(m.name),
+  });
+
+  // 4. Memory over requests served.
+  const mem = r.memory.filter((x) => shown.includes(x.server + ':' + x.apcu));
+  draw('memory', {
+    type: 'line',
+    data: { datasets: shown.filter((c) => mem.some((x) => x.server + ':' + x.apcu === c)).map((c) => ({
+      label: label(c), borderColor: colour(c), backgroundColor: colour(c), tension: 0.2,
+      data: mem.filter((x) => x.server + ':' + x.apcu === c).map((x) => ({ x: x.requests, y: x.rss_kb / 1024 })),
+    })) },
+    options: { ...baseOptions('MB'), scales: { ...baseOptions('MB').scales, x: { type: 'linear', ticks: { color: css('--muted') }, grid: { color: css('--line') }, title: { display: true, text: 'requests served', color: css('--muted') } } } },
+  });
+
+  // 5. Table: every metric for the chosen route and concurrency; the best value in each column marked.
+  $('t-table').textContent = `/${state.route} · ${state.c} connections · ${state.stat === 'median' ? 'median of reps' : 'rep ' + state.stat}`;
+  const keys = Object.keys(METRICS);
+  const rows = shown.map((c) => ({ c, vals: keys.map((k) => value(c, state.route, state.c, k)?.v ?? null), share: median(r.points.filter((p) => p.cell === c && p.route === state.route && p.c === state.c && p.red_share != null).map((p) => p.red_share)) }));
+  const best = keys.map((k, i) => { const xs = rows.map((x) => x.vals[i]).filter((v) => v != null); return METRICS[k].better === 'high' ? Math.max(...xs) : Math.min(...xs); });
+  $('table').innerHTML = `<thead><tr><th>Cell</th>${keys.map((k) => `<th>${METRICS[k].name}</th>`).join('')}<th>red CPU busy</th></tr></thead><tbody>` +
+    rows.map((x) => `<tr><td><span class="dot" style="background:${colour(x.c)}"></span> ${label(x.c)}</td>${x.vals.map((v, i) => `<td class="${v === best[i] ? 'win' : ''}">${fmt(v, METRICS[keys[i]].digits)}</td>`).join('')}<td>${isNaN(x.share) ? '—' : Math.round(x.share * 100) + '%'}</td></tr>`).join('') + '</tbody>';
+
+  // 6. Behaviour.
+  const beh = r.behaviour.filter((b) => shown.includes(b.server + ':' + b.apcu));
+  $('behaviour').innerHTML = beh.length ? `<thead><tr><th>Cell</th><th>status</th><th>static file</th><th>upload</th><th>stream</th><th>reload: errors / requests</th><th>kill -9: back in</th><th>past max_execution_time</th><th>stop leftovers</th></tr></thead><tbody>` +
+    beh.map((b) => { const w = b.reload_wrk || {}; const errs = (w.non2xx || 0) + (w.err_connect || 0) + (w.err_read || 0) + (w.err_write || 0) + (w.err_timeout || 0);
+      return `<tr><td>${label(b.server + ':' + b.apcu)}</td><td>exit ${b.status_exit}</td><td>${b.static}</td><td>${Number(b.upload_bytes).toLocaleString()} B</td><td>${b.stream_bytes.toLocaleString()} B</td><td class="${errs ? 'fail' : ''}">${errs} / ${(w.requests || 0).toLocaleString()}</td><td>${b.killed_pid == null ? 'n/a (threads)' : b.recovered_s != null ? b.recovered_s + ' s' : '<span class="fail">no</span>'}</td><td>${b.slow_status} at ${b.slow_s} s, next ${b.after_slow}</td><td>${(b.stop.killed_leftovers || '').trim() ? b.stop.killed_leftovers.trim().split(/\s+/).length + ' processes, killed' : 'none'}</td></tr>`; }).join('') + '</tbody>'
+    : '<tbody><tr><td>No behaviour checks in this round.</td></tr></tbody>';
+}
+
+function applyTheme(mode) {
+  if (mode === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', mode);
+  $('theme').textContent = 'Theme: ' + mode;
+  store.set('rocketship-bench-theme', mode);
+}
+
+function bind() {
+  $('round').onchange = (e) => { state.round = Number(e.target.value); setupControls(); render(); };
+  $('route').onchange = (e) => { state.route = e.target.value; render(); };
+  $('conc').onchange = (e) => { state.c = Number(e.target.value); render(); };
+  $('metric').onchange = (e) => { state.metric = e.target.value; render(); };
+  $('stat').onchange = (e) => { state.stat = e.target.value; render(); };
+  $('apcu').onchange = (e) => { state.apcu = e.target.value; render(); };
+  $('cells').onchange = (e) => { if (e.target.checked) state.hidden.delete(e.target.value); else state.hidden.add(e.target.value); render(); };
+  $('theme').onclick = () => { const modes = ['auto', 'light', 'dark']; applyTheme(modes[(modes.indexOf(store.get('rocketship-bench-theme') || 'auto') + 1) % 3]); setupControls(); render(); };
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { setupControls(); render(); });
+}
+
+applyTheme(store.get('rocketship-bench-theme') || 'auto');
+state.round = DATA.rounds.length - 1;
+setupControls();
+bind();
+render();
+</script>
+</body>
+</html>

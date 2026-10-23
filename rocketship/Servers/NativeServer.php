@@ -83,6 +83,10 @@ final class NativeServer implements ServerDriver
             $command->outputComponents()->warn('The native server needs ext-pcntl and ext-posix.');
         }
 
+        if (($listen = WorkerMode::slotListenUnavailable()) !== null) {
+            $command->outputComponents()->warn("The native server needs {$listen}.");
+        }
+
         if (! extension_loaded('epoll') && ! extension_loaded('kqueue')) {
             $command->outputComponents()->warn('The native server runs on select() without ext-epoll (Linux) or ext-kqueue (macOS).');
         }

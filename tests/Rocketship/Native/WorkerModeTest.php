@@ -35,3 +35,10 @@ it('refuses threads on a PHP without pcntl or posix, which supervise them', func
     expect(WorkerMode::threadsUnavailable(fn (string $function) => $function !== $missing && function_exists($function)))
         ->toBe('ext-pcntl and ext-posix to supervise worker threads');
 })->with(['pcntl_sigprocmask', 'pcntl_async_signals', 'posix_kill']);
+
+it('needs posix_listen where each worker slot has its own socket', function () {
+    expect(WorkerMode::slotListenUnavailable(fn (string $function) => $function !== 'posix_listen' && function_exists($function), perSlot: true))
+        ->toBe('ext-posi with posix_listen (0.10.6 or later) to open each worker slot once it has booted')
+        ->and(WorkerMode::slotListenUnavailable(fn (string $function) => $function !== 'posix_listen', perSlot: false))->toBeNull()
+        ->and(WorkerMode::slotListenUnavailable(function_exists(...), perSlot: true))->toBe(function_exists('posix_listen') ? null : 'ext-posi with posix_listen (0.10.6 or later) to open each worker slot once it has booted');
+});

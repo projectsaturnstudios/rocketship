@@ -22,6 +22,9 @@ final class NativeServerProcess
 
     public readonly string $stateFile;
 
+    /** The process group the server leads: its pid. */
+    public readonly int $group;
+
     /**
      * @param  array<string, mixed>  $state  merged over the defaults the start command would write
      * @param  array<string, string>  $env
@@ -71,6 +74,11 @@ final class NativeServerProcess
 
         $artisan === null && file_put_contents($this->stateFile, json_encode(['state' => $serverState]));
 
+        // The server leads its own process group, so stop() finds everything it started, whatever the processes
+        // call themselves (Swoole renames its own) and without matching command lines (a pgrep's own shell would
+        // match). The same pid execs the server, so signals reach it unchanged.
+        $command = [PHP_BINARY, '-r', 'posix_setpgid(0, 0); pcntl_exec($argv[1], array_slice($argv, 2));', '--', ...$command];
+
         $this->process = new Process($command, $artisan === null ? $package : $this->root, [
             'APP_BASE_PATH' => $this->root,
             'APP_ENV' => 'production',
@@ -87,6 +95,7 @@ final class NativeServerProcess
         ]);
 
         $this->process->start();
+        $this->group = (int) $this->process->getPid();
 
         if ($wait) {
             $this->waitUntilListening();
@@ -113,24 +122,44 @@ final class NativeServerProcess
      */
     private function without(array $extensions): array
     {
-        $scan = PHP_CONFIG_FILE_SCAN_DIR;
         $loaded = array_filter($extensions, extension_loaded(...));
+        $scans = array_filter(self::scanDirs(), is_dir(...));
 
-        if ($loaded === [] || $scan === '' || ! is_dir($scan)) {
+        if ($loaded === [] || $scans === []) {
             return [];
         }
 
         mkdir($dir = $this->root.'/ini');
 
-        foreach (glob($scan.'/*.ini') ?: [] as $ini) {
-            $contents = (string) file_get_contents($ini);
+        // In the order PHP reads them: directory by directory, files by name within each.
+        foreach (array_values($scans) as $index => $scan) {
+            foreach (glob($scan.'/*.ini') ?: [] as $ini) {
+                $contents = (string) file_get_contents($ini);
 
-            if (! array_filter($loaded, fn (string $extension) => str_contains($contents, $extension))) {
-                copy($ini, $dir.'/'.basename($ini));
+                if (! array_filter($loaded, fn (string $extension) => str_contains($contents, $extension))) {
+                    copy($ini, sprintf('%s/%02d-%s', $dir, $index, basename($ini)));
+                }
             }
         }
 
         return ['PHP_INI_SCAN_DIR' => $dir];
+    }
+
+    /**
+     * The directories this PHP scans for ini files: PHP_INI_SCAN_DIR when set, where an empty entry stands for
+     * the compiled-in directory, else the compiled-in directory.
+     *
+     * @return list<string>
+     */
+    private static function scanDirs(): array
+    {
+        $env = getenv('PHP_INI_SCAN_DIR');
+
+        if ($env === false) {
+            return [PHP_CONFIG_FILE_SCAN_DIR];
+        }
+
+        return array_map(fn (string $scan) => $scan === '' ? PHP_CONFIG_FILE_SCAN_DIR : $scan, explode(PATH_SEPARATOR, $env));
     }
 
     /**
@@ -264,6 +293,23 @@ final class NativeServerProcess
             : 0;
     }
 
+    /**
+     * PIDs of the processes still in the server's group. Each is killed by pid, never by group: a group id of 0 or
+     * of the test runner's own group would take the runner with it.
+     *
+     * @return list<int>
+     */
+    public function processGroup(): array
+    {
+        if ($this->group <= 0 || $this->group === posix_getpgrp()) {
+            return [];
+        }
+
+        exec('pgrep -g '.$this->group, $pids);
+
+        return array_map(intval(...), $pids);
+    }
+
     public function signal(int $signal): void
     {
         // Pid 0 would signal this whole process group, test runner included.
@@ -343,9 +389,8 @@ final class NativeServerProcess
         }
 
         // A server the start command left behind: Octane's octane:start --server=swoole does not end on SIGTERM
-        // here, and killing it orphans swoole-server. Every PHP process naming this app copy goes.
-        exec('pgrep -f '.escapeshellarg('php.*'.$this->root), $orphans);
-        array_map(fn (string $pid) => posix_kill((int) $pid, SIGKILL), $orphans);
+        // here, and killing it orphans swoole-server. Every process left in the server's group goes.
+        array_map(fn (int $pid) => posix_kill($pid, SIGKILL), $this->processGroup());
 
         // A supervisor killed outright leaves its control socket; outside the app root it outlives the rm.
         if (($pid = $this->supervisorPid()) > 0 && file_exists($socket = ControlSocket::path($this->root, $pid))) {

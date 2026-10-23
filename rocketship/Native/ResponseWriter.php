@@ -29,10 +29,12 @@ class ResponseWriter
      *                                               bag rewrites Cache-Control and appends charsets)
      */
     /**
-     * True while a streamed response's output handler runs. A thread cancelled there (max_execution_time) leaves
-     * PHP's output layer marked running, and its request shutdown then reports a fatal that is only that.
+     * True while a streamed response sends its content. A thread cancelled inside the output handler
+     * (max_execution_time) leaves PHP's output layer marked running, and its request shutdown then reports a fatal
+     * that is only that. PHP checks for the cancel on entry to the handler, before its first statement, so the flag
+     * covers the whole send, not the handler alone.
      */
-    public static bool $inOutputHandler = false;
+    public static bool $streaming = false;
 
     public function write(Connection $connection, ParsedRequest $request, Response $response, string $outputBuffer = '', array $exactHeaders = []): void
     {
@@ -138,15 +140,11 @@ class ResponseWriter
 
         $emit($outputBuffer);
 
-        ob_start(static function (string $data) use ($emit): string {
-            // A cancel jumps out without running finally, which leaves the flag set exactly when it should be.
-            self::$inOutputHandler = true;
+        // A cancel jumps out without running finally, which leaves the flag set exactly when it should be.
+        self::$streaming = true;
 
-            try {
-                $emit($data);
-            } finally {
-                self::$inOutputHandler = false;
-            }
+        ob_start(static function (string $data) use ($emit): string {
+            $emit($data);
 
             return '';
         }, 1);
@@ -155,6 +153,7 @@ class ResponseWriter
             $response->sendContent();
         } finally {
             ob_end_clean();
+            self::$streaming = false;
         }
 
         if ($chunked) {

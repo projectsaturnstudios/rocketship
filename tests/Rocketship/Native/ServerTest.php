@@ -236,3 +236,42 @@ it('answers a timed-out thread\'s client without blocking on a full send buffer'
     fclose($client);
     fclose($listener);
 });
+
+it('binds a socket that refuses connections until posix_listen', function () {
+    $socket = Server::listen('127.0.0.1', 0, listen: false);
+    $port = (int) substr(strrchr(stream_socket_get_name($socket, false), ':'), 1);
+
+    expect(@stream_socket_client("tcp://127.0.0.1:{$port}", $errno, $error, 1))->toBeFalse();
+
+    expect(posix_listen(posix_fileno($socket), Server::BACKLOG))->toBe(0)
+        ->and(stream_socket_client("tcp://127.0.0.1:{$port}", $errno, $error, 1))->toBeResource();
+
+    fclose($socket);
+});
+
+it('gives a slot socket no connections from its port until it listens', function () {
+    if (PHP_OS_FAMILY !== 'Linux') {
+        test()->markTestSkipped('per-slot SO_REUSEPORT sockets are Linux only');
+    }
+
+    $serving = Server::listen('127.0.0.1', 0, reusePort: true);
+    $port = (int) substr(strrchr(stream_socket_get_name($serving, false), ':'), 1);
+    $waiting = Server::listen('127.0.0.1', $port, reusePort: true, listen: false);
+
+    $accepted = function () use ($serving, $waiting, $port): array {
+        $clients = array_map(fn () => stream_socket_client("tcp://127.0.0.1:{$port}", $errno, $error, 1), range(1, 40));
+        usleep(100_000);
+        $count = fn ($socket) => count(array_filter(array_map(fn () => @stream_socket_accept($socket, 0), range(1, 40))));
+
+        return [$count($serving), $count($waiting), count(array_filter($clients, is_resource(...)))];
+    };
+
+    expect($accepted())->toBe([40, 0, 40]);
+
+    posix_listen(posix_fileno($waiting), Server::BACKLOG);
+    [$first, $second, $connected] = $accepted();
+
+    expect($connected)->toBe(40)
+        ->and($first + $second)->toBe(40)
+        ->and($second)->toBeGreaterThan(0);
+});

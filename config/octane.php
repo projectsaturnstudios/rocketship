@@ -257,8 +257,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | The native server runs its workers as threads (a ZTS PHP with parallel
-    | and posi) or as forked processes (pcntl). "auto" picks threads when this
-    | PHP can run them. TLS takes a certificate, and a key unless the PEM file
+    | and posi) or as forked processes (pcntl). On Linux it also needs posi
+    | 0.10.6 or later in both modes. "auto" picks threads when this PHP can
+    | run them. TLS takes a certificate, and a key unless the PEM file
     | holds it. Timeouts are in seconds; max_body is in bytes.
     |
     */

@@ -11,8 +11,9 @@ use Throwable;
 /**
  * Threads mode: each worker is a parallel\Runtime in this process that boots its own application.
  *
- * Each worker runs inside a keeper thread. Cancelling a task waits until a blocking call (sleep, a socket read)
- * returns, so the master never cancels a worker itself: it tells the keeper, and only the keeper waits.
+ * Each worker runs inside a keeper thread, asleep in Channel::recv() until the master sends `reap` or `cancel`.
+ * Cancelling a task waits until a blocking call (sleep, a socket read) returns, so the master never cancels a
+ * worker itself: it tells the keeper, and only the keeper waits.
  */
 final class ThreadSpawner implements WorkerSpawner
 {
@@ -57,27 +58,29 @@ final class ThreadSpawner implements WorkerSpawner
                 return \ProjectSaturnStudios\Rocketship\Native\NativeWorker::runThread($state, $slot, $token, $fd);
             }, [$state, $slot, $token, $fd]);
 
-            $events = new \parallel\Events;
-            $events->addFuture('worker', $task);
-            $events->addChannel($commands);
-
-            while (true) {
-                $event = $events->poll();
-
-                if ($event->source === 'worker') {
-                    return match ($event->type) {
-                        \parallel\Events\Event\Type::Read => (string) $event->value,
-                        \parallel\Events\Event\Type::Cancel => 'cancelled',
-                        \parallel\Events\Event\Type::Kill => 'fatal',
-                        default => 'error',
-                    };
+            // recv() sleeps until a command arrives. parallel's blocking Events::poll() spins instead, waking tens of
+            // thousands of times a second and taking the cores from the workers. The master sends `reap` on its reap
+            // timer, so an ended worker is seen within one interval.
+            while ($commands->recv() !== 'cancel') {
+                if (! $task->done()) {
+                    continue;
                 }
 
-                // `cancel`: waits here, never in the master, until a blocking call returns; the task stops there.
-                $task->cancel();
-
-                return 'cancelled';
+                try {
+                    return (string) $task->value();
+                } catch (\parallel\Future\Error\Cancelled) {
+                    return 'cancelled';
+                } catch (\parallel\Future\Error\Killed) {
+                    return 'fatal';
+                } catch (Throwable) {
+                    return 'error';
+                }
             }
+
+            // `cancel`: waits here, never in the master, until a blocking call returns; the task stops there.
+            $task->cancel();
+
+            return 'cancelled';
         }, [dirname(__DIR__, 2).'/bin/native-thread.php', $this->state, $slot, $token, ($this->listenerFd)($slot), $commands]);
 
         $this->threads[$token] = ['runtime' => $runtime, 'future' => $future, 'commands' => $commands, 'cancelled' => false];
@@ -87,8 +90,11 @@ final class ThreadSpawner implements WorkerSpawner
     {
         $ended = [];
 
-        foreach ($this->threads as $token => ['runtime' => $runtime, 'future' => $future]) {
+        foreach ($this->threads as $token => ['runtime' => $runtime, 'future' => $future, 'commands' => $commands]) {
             if (! $future->done()) {
+                // The keeper sleeps until a command arrives: this one has it look at its worker.
+                $commands->send('reap');
+
                 continue;
             }
 

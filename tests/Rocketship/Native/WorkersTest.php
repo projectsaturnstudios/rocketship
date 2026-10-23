@@ -131,6 +131,30 @@ it('lets no request past max_execution_time finish its work', function (string $
     expect(is_file($server->root.'/storage/marked'))->toBeFalse();
 })->with('modes');
 
+it('answers the next request on an idle keep-alive connection through a reload, then closes it', function (string $mode) {
+    // Swoole's master owns client connections, so a reload never closes one under a client. A native worker owns
+    // its connections: closing an idle keep-alive at once races a request the client has just sent on it.
+    $server = nativeServer($mode, ['workers' => 1]);
+    $client = stream_socket_client("tcp://127.0.0.1:{$server->port}", $errno, $error, 2);
+    stream_set_timeout($client, 5);
+    $request = "GET /worker HTTP/1.1\r\nHost: localhost\r\n\r\n";
+
+    fwrite($client, $request);
+    $first = readHttpResponse($client);
+    $server->signal(SIGUSR1);
+    usleep(300_000); // the worker has the reload frame and drains
+
+    fwrite($client, $request);
+    $second = readHttpResponse($client);
+
+    expect($first['status'])->toBe(200)
+        ->and($second['status'])->toBe(200)
+        ->and(strtolower($second['headers']['connection'] ?? ''))->toBe('close')
+        ->and(json_decode($second['body'], true)['boot'])->toBe(json_decode($first['body'], true)['boot'])
+        ->and(fread($client, 1))->toBe('')
+        ->and(feof($client))->toBeTrue();
+})->with('modes');
+
 it('reloads every worker on SIGUSR1 while still answering', function (string $mode) {
     $server = nativeServer($mode, ['workers' => 2]);
     $before = bootTokens($server->hammer('/worker', 40));
@@ -424,6 +448,31 @@ it('ends a thread timed out inside a streamed response without a shutdown fatal'
     expect($server->output())->not->toContain('Fatal error')->not->toContain('output buffering');
 });
 
+it('keeps a threads-mode server asleep while it has no requests', function () {
+    if (PHP_OS_FAMILY !== 'Linux') {
+        test()->markTestSkipped('counts context switches from /proc, which is Linux only');
+    }
+
+    $server = nativeServer('threads', ['workers' => 2]);
+    $server->worker();
+    $switches = function () use ($server): int {
+        $total = 0;
+
+        foreach (glob("/proc/{$server->supervisorPid()}/task/*/status") ?: [] as $status) {
+            preg_match_all('/^(?:non)?voluntary_ctxt_switches:\s+(\d+)/m', (string) @file_get_contents($status), $counts);
+            $total += array_sum(array_map('intval', $counts[1]));
+        }
+
+        return $total;
+    };
+
+    $before = $switches();
+    $server->pause(1.0);
+
+    // Each worker's keeper waits for its worker or a command; a keeper that spins wakes tens of thousands of times.
+    expect($switches() - $before)->toBeLessThan(1000);
+});
+
 it('runs concurrently() in the request until native has task workers, even with ext-swoole loaded', function () {
     if (! extension_loaded('swoole')) {
         test()->markTestSkipped('the broken path needs ext-swoole loaded');
@@ -450,8 +499,10 @@ it('keeps serving from healthy slots when a crashed worker cannot boot, and refi
     $server->get('/fatal'); // one worker dies; its replacement cannot boot
     $server->pause(2.0);
 
+    // The healthy slot answers every new connection. On Linux each slot has its own socket and the kernel spreads
+    // connections over the group: a broken slot's socket must leave it, or the connections it gets wait unanswered.
     expect($server->process->isRunning())->toBeTrue()
-        ->and($server->get('/worker')['status'])->toBe(200); // the healthy slot still serves
+        ->and(array_unique(array_column($server->hammer('/worker', 20), 'status')))->toBe([200]);
 
     unlink($server->root.'/storage/break-boot');
     $deadline = microtime(true) + 10;
@@ -462,3 +513,39 @@ it('keeps serving from healthy slots when a crashed worker cannot boot, and refi
 
     expect(count($tokens))->toBe(2); // the slot came back
 })->with('modes');
+
+/**
+ * Read one HTTP/1.1 response with a Content-Length body from a blocking socket.
+ *
+ * @param  resource  $socket
+ * @return array{status: int, headers: array<string, string>, body: string}
+ */
+function readHttpResponse($socket): array
+{
+    $head = '';
+
+    while (! str_contains($head, "\r\n\r\n") && ($line = fgets($socket)) !== false) {
+        $head .= $line;
+    }
+
+    if ($head === '') {
+        return ['status' => 0, 'headers' => [], 'body' => ''];
+    }
+
+    $lines = explode("\r\n", trim($head));
+    $headers = [];
+
+    foreach (array_slice($lines, 1) as $line) {
+        [$name, $value] = array_map(trim(...), explode(':', $line, 2)) + [1 => ''];
+        $headers[strtolower($name)] = $value;
+    }
+
+    $length = (int) ($headers['content-length'] ?? 0);
+    $body = '';
+
+    while (strlen($body) < $length && ($chunk = fread($socket, $length - strlen($body))) !== false && $chunk !== '') {
+        $body .= $chunk;
+    }
+
+    return ['status' => (int) explode(' ', $lines[0])[1], 'headers' => $headers, 'body' => $body];
+}

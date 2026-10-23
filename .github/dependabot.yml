@@ -1,12 +1,13 @@
 version: 2
+
 updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
+  - package-ecosystem: composer
+    directory: /
     schedule:
-      interval: "weekly"
-    cooldown:
-      default-days: 5
-    groups:
-      github-actions:
-        patterns:
-          - "*"
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

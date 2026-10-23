@@ -90,8 +90,11 @@ final class Supervisor
         $this->state['controlSecret'] = bin2hex(random_bytes(16));
 
         if (WorkerMode::kernelBalancesListeners()) {
+            // A slot's socket joins the port when its worker has booted and calls posix_listen, so the kernel never
+            // queues a connection on a slot nobody serves. Slot 0 listens now: the port queues connections from the
+            // start, as Swoole's does, and its first worker answers them once booted.
             for ($slot = 0; $slot < (int) $this->state['workers']; $slot++) {
-                $this->slotListeners[$slot] = Server::listen($this->state['host'], (int) $this->state['port'], reusePort: true);
+                $this->slotListeners[$slot] = Server::listen($this->state['host'], (int) $this->state['port'], reusePort: true, listen: $slot === 0);
             }
         } else {
             $this->listener = Server::listen($this->state['host'], (int) $this->state['port']);
@@ -145,6 +148,19 @@ final class Supervisor
             if (is_resource($listener)) {
                 fclose($listener);
             }
+        }
+    }
+
+    /**
+     * A slot whose replacement cannot boot leaves the port: the kernel would keep queueing connections on its
+     * listening socket, and nobody would answer them. Those already queued there are reset. The slot gets a
+     * socket that is only bound, which its next worker opens once it has booted.
+     */
+    private function unlistenSlot(int $slot): void
+    {
+        if (isset($this->slotListeners[$slot])) {
+            fclose($this->slotListeners[$slot]);
+            $this->slotListeners[$slot] = Server::listen($this->state['host'], (int) $this->state['port'], reusePort: true, listen: false);
         }
     }
 
@@ -403,6 +419,7 @@ final class Supervisor
             // Other slots still serve: keep them, and retry this one, as Swoole's manager respawns a worker that
             // dies. A second apart, so an app that stays broken does not spin.
             fwrite(STDERR, "Worker {$worker->slot} could not boot the application; retrying while the other workers serve.".PHP_EOL);
+            $this->unlistenSlot($worker->slot);
             $this->loop->addTimer(self::RESPAWN_DELAY, function () use ($worker): void {
                 if (! $this->stopping && $this->current[$worker->slot] === $worker->token) {
                     $this->spawn($worker->slot);

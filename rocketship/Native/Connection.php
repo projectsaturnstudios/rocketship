@@ -195,16 +195,26 @@ final class Connection
     }
 
     /** Stop taking new requests: close now when idle, otherwise after the response in flight. */
-    public function drain(): void
+    /**
+     * Finish what the client sent and close. With $keepIdle (a reload: a replacement serves on) an idle
+     * connection stays open for its next request; without it (a stop) an idle keep-alive closes now.
+     */
+    public function drain(bool $keepIdle = false): void
     {
         $this->draining = true;
         $this->keepAlive = false;
 
-        // A connection accepted moments ago may not have sent its request yet: let it, then close.
-        // One that never sends is closed by the sweep at the keep-alive timeout. An idle keep-alive has
-        // nothing of the client's in flight, so it goes now rather than lingering.
+        // A connection accepted moments ago may not have sent its request yet: let it, then close. Part of a
+        // head is closed gracefully. On a reload an idle keep-alive stays open too: its client may have sent the
+        // next request already, and closing now would race it. That request is answered with
+        // `Connection: close`, and one that never comes is closed by the sweep at the keep-alive timeout. Swoole's
+        // master keeps client connections open across a reload the same way. On a stop it goes now.
         if ($this->isIdle() && $this->requests > 0) {
-            $this->parser->headPending() ? $this->close() : $this->terminate();
+            match (true) {
+                $this->parser->headPending() => $this->close(),
+                ! $keepIdle => $this->terminate(),
+                default => null,
+            };
         }
     }
 

@@ -195,11 +195,22 @@ it('streams a large download without holding it in memory', function () {
     $received = 0;
     $deadline = microtime(true) + 30;
 
-    // A slow reader: 64 KB at a time, counted and dropped, so only the server's buffers count.
+    // A slow reader: it sleeps between reads, so the server must hold back rather than buffer. Each wake moves up to
+    // 4 MB, ticking the server and draining the socket until it runs dry, counted and dropped. macOS CI runners
+    // stretch the sleep to 40-75 ms; a fixed amount per wake would then run out of time before the download ends.
     while ($received <= $size && microtime(true) < $deadline) {
-        $harness->loop->tick(0.0);
-        $chunk = @fread($client, 65536);
-        $received += is_string($chunk) ? strlen($chunk) : 0;
+        for ($woke = 0; $woke < 4 * 1_048_576;) {
+            $harness->loop->tick(0.0);
+            $chunk = @fread($client, 1_048_576);
+
+            if (! is_string($chunk) || $chunk === '') {
+                break;
+            }
+
+            $woke += strlen($chunk);
+        }
+
+        $received += $woke;
         usleep(1000);
     }
 

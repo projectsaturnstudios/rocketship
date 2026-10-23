@@ -24,12 +24,21 @@ it('re-arms periodic timers and cancels them', function () {
     $loop = selectLoop();
     $count = 0;
     $timer = $loop->addPeriodicTimer(0.005, function () use (&$count) { $count++; });
-    $loop->addTimer(0.03, function () use ($loop, $timer) { $loop->cancelTimer($timer); });
-    $loop->addTimer(0.05, fn () => $loop->stop());
 
-    $loop->run();
+    // Sleep past the interval, then tick without waiting: the count can't depend on how late the OS wakes the
+    // loop, which on macOS CI runners is often tens of milliseconds.
+    for ($i = 0; $i < 3; $i++) {
+        usleep(6000);
+        $loop->tick(0.0);
+    }
 
-    expect($count)->toBeGreaterThanOrEqual(3)->toBeLessThanOrEqual(7);
+    expect($count)->toBe(3); // re-armed after each firing
+
+    $loop->cancelTimer($timer);
+    usleep(6000);
+    $loop->tick(0.0);
+
+    expect($count)->toBe(3);
 });
 
 it('dispatches a readable stream and honours cancellation mid-dispatch', function () {

@@ -54,9 +54,9 @@
     "suggest": {
         "ext-pcntl": "Native server: supervises its workers. Required by the native server in both modes.",
         "ext-posix": "Native server: required in both modes.",
-        "ext-epoll": "Native server on Linux: pie install php-io-extensions/epoll",
-        "ext-kqueue": "Native server on macOS: pie install php-io-extensions/kqueue",
-        "ext-posi": "Native server: pie install php-io-extensions/posi (0.10.6 or later). Linux needs it in both modes; threads mode needs it everywhere.",
+        "ext-epoll": "Native server on Linux: pie install php-io-extensions/epoll (^0.10.6|^0.11.0)",
+        "ext-kqueue": "Native server on macOS: pie install php-io-extensions/kqueue (^0.10.5|^0.11.0)",
+        "ext-posi": "Native server: pie install php-io-extensions/posi (^0.10.6|^0.11.0). Linux needs it in both modes; threads mode needs it everywhere.",
         "ext-parallel": "Native server threads mode, on a ZTS PHP.",
         "ext-swoole": "Octane's Swoole server."
     },
@@ -95,7 +95,7 @@
     },
     "extra": {
         "branch-alias": {
-            "dev-main": "0.10.x-dev"
+            "dev-main": "0.11.x-dev"
         },
         "laravel": {
             "providers": [

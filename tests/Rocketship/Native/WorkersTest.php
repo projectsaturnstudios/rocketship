@@ -493,7 +493,15 @@ it('runs concurrently() in the request until native has task workers, even with 
 
 it('keeps serving from healthy slots when a crashed worker cannot boot, and refills the slot once it can', function (string $mode) {
     $server = nativeServer($mode, ['workers' => 2]);
-    expect(count(bootTokens($server->hammer('/worker', 30))))->toBe(2);
+
+    // Ready means one worker answered; on Linux slot 1 takes no connections until its worker has booted.
+    $deadline = microtime(true) + 10;
+
+    do {
+        $tokens = bootTokens($server->hammer('/worker', 30));
+    } while (count($tokens) < 2 && microtime(true) < $deadline);
+
+    expect(count($tokens))->toBe(2);
 
     touch($server->root.'/storage/break-boot');
     $server->get('/fatal'); // one worker dies; its replacement cannot boot
